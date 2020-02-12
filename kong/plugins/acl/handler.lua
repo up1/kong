@@ -66,14 +66,10 @@ function ACLHandler:access(conf)
     local authenticated_groups = groups.get_authenticated_groups()
     if not authenticated_groups then
       if kong.client.get_credential() then
-        return kong.response.exit(403, {
-          message = "You cannot consume this service"
-        })
+        return kong.response.error(403, "You cannot consume this service")
       end
 
-      return kong.response.exit(401, {
-        message = "Unauthorized"
-      })
+      return kong.response.error(401)
     end
 
     local in_group = groups.group_in_groups(config.groups, authenticated_groups)
@@ -99,9 +95,7 @@ function ACLHandler:access(conf)
       local consumer_groups, err = groups.get_consumer_groups(consumer_id)
       if err then
         kong.log.err(err)
-        return kong.response.exit(500, {
-          message = "An unexpected error occurred"
-        })
+        return kong.response.error(500)
       end
 
       if not consumer_groups then
@@ -110,14 +104,10 @@ function ACLHandler:access(conf)
 
         else
           if credential then
-            return kong.response.exit(403, {
-              message = "You cannot consume this service"
-            })
+            return kong.response.error(403, "You cannot consume this service")
           end
 
-          return kong.response.exit(401, {
-            message = "Unauthorized"
-          })
+          return kong.response.error(401)
         end
       end
 
@@ -135,9 +125,7 @@ function ACLHandler:access(conf)
   end
 
   if to_be_blocked == true then -- NOTE: we only catch the boolean here!
-    return kong.response.exit(403, {
-      message = "You cannot consume this service"
-    })
+    return kong.response.error(403, "You cannot consume this service")
   end
 
   if not conf.hide_groups_header and to_be_blocked then

@@ -79,9 +79,7 @@ function _M.execute(conf)
       kong.log.err("failed to get usage: ", tostring(err))
       return
     else
-      return kong.response.exit(HTTP_INTERNAL_SERVER_ERROR, {
-        message = "An unexpected error occurred"
-      })
+      return kong.response.error(HTTP_INTERNAL_SERVER_ERROR)
     end
   end
 
@@ -90,9 +88,8 @@ function _M.execute(conf)
     local remaining
     for _, lv in pairs(usage[k]) do
       if conf.block_on_first_violation and lv.remaining == 0 then
-        return kong.response.exit(HTTP_TOO_MANY_REQUESTS, {
-          message = "API rate limit exceeded for '" .. k .. "'"
-        })
+        return kong.response.error(HTTP_TOO_MANY_REQUESTS,
+          "API rate limit exceeded for '" .. k .. "'")
       end
 
       if not remaining or lv.remaining < remaining then

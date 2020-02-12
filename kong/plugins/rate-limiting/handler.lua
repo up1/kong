@@ -128,7 +128,7 @@ function RateLimitingHandler:access(conf)
       kong.log.err("failed to get usage: ", tostring(err))
     else
       kong.log.err(err)
-      return kong.response.exit(500, { message = "An unexpected error occurred" })
+      return kong.response.error(500)
     end
   end
 
@@ -178,7 +178,7 @@ function RateLimitingHandler:access(conf)
 
     -- If limit is exceeded, terminate the request
     if stop then
-      return kong.response.exit(429, { message = "API rate limit exceeded" }, {
+      return kong.response.error(429, "API rate limit exceeded", {
         [RETRY_AFTER] = reset
       })
     end

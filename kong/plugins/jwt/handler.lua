@@ -127,7 +127,7 @@ local function do_authentication(conf)
   local token, err = retrieve_token(conf)
   if err then
     kong.log.err(err)
-    return kong.response.exit(500, { message = "An unexpected error occurred" })
+    return kong.response.error(500)
   end
 
   local token_type = type(token)
@@ -163,7 +163,7 @@ local function do_authentication(conf)
                                               load_credential, jwt_secret_key)
   if err then
     kong.log.err(err)
-    return kong.response.exit(500, { message = "An unexpected error occurred" })
+    return kong.response.error(500)
   end
 
   if not jwt_secret then
@@ -213,7 +213,7 @@ local function do_authentication(conf)
                                             kong.client.load_consumer,
                                             jwt_secret.consumer.id, true)
   if err then
-    return kong.response.exit(500, { message = "An unexpected error occurred" })
+    return kong.response.error(500)
   end
 
   -- However this should not happen
@@ -252,7 +252,7 @@ function JwtHandler:access(conf)
                                                 conf.anonymous, true)
       if err then
         kong.log.err("failed to load anonymous consumer:", err)
-        return kong.response.exit(500, { message = "An unexpected error occurred" })
+        return kong.response.error(500)
       end
 
       set_consumer(consumer)

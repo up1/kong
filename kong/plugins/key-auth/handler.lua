@@ -137,9 +137,7 @@ local function do_authentication(conf)
                                     key)
   if err then
     kong.log.err(err)
-    return kong.response.exit(500, {
-      message = "An unexpected error occurred"
-    })
+    return kong.response.error(500)
   end
 
   -- no credential in DB, for this key, it is invalid, HTTP 401
@@ -190,13 +188,13 @@ function KeyAuthHandler:access(conf)
                                            conf.anonymous, true)
       if err then
         kong.log.err("failed to load anonymous consumer:", err)
-        return kong.response.exit(500, { message = "An unexpected error occurred" })
+        return kong.response.error(500)
       end
 
       set_consumer(consumer)
 
     else
-      return kong.response.exit(err.status, { message = err.message }, err.headers)
+      return kong.response.error(err.status, err.message, err.headers)
     end
   end
 end

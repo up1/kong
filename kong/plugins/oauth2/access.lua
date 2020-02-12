@@ -47,7 +47,7 @@ local AUTHENTICATED_USERID = "authenticated_userid"
 
 local function internal_server_error(err)
   kong.log.err(err)
-  return kong.response.exit(500, { message = "An unexpected error occurred" })
+  return kong.response.error(500)
 end
 
 
@@ -883,7 +883,7 @@ function _M.execute(conf)
                                                 conf.anonymous, true)
       if err then
         kong.log.err("failed to load anonymous consumer:", err)
-        return kong.response.exit(500, { message = "An unexpected error occurred" })
+        return kong.response.error(500)
       end
 
       set_consumer(consumer)
