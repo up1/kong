@@ -8,3 +8,4 @@ readme='readme.md'
 sort=true
 sort_modules=true
 style='./'
+no_space_before_args=true

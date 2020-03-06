@@ -26,3 +26,6 @@ This comes in handy when inspecting then logs after the tests completed.
 When testing with Redis, the environment variable `KONG_SPEC_REDIS_HOST` can be
 used to specify where the Redis server can be found. If not specified it will default
 to `127.0.0.1`. This setting is available to tests via `helpers.redis_host`.
+
+The configuration file to use can be set by `KONG_SPEC_TEST_CONF_PATH`. It can be
+gotten from the helpers as field `helpers.test_conf_path`.

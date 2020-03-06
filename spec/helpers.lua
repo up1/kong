@@ -827,6 +827,7 @@ local function proxy_client_h2()
   return http2_client(proxy_ip, proxy_port, true)
 end
 
+local exec -- forward declaration
 
 --- Creates a gRPC client, based on the grpcurl CLI.
 -- @name grpc_client
@@ -1937,7 +1938,7 @@ end
 -- @return if `pl_returns` is true, returns four return values
 -- (ok, code, stdout, stderr); if `pl_returns` is false,
 -- returns either (false, stderr) or (true, stderr, stdout).
-local function exec(cmd, pl_returns)
+function exec(cmd, pl_returns)
   local ok, code, stdout, stderr = pl_utils.executeex(cmd)
   if pl_returns then
     return ok, code, stdout, stderr
@@ -2309,11 +2310,38 @@ local function restart_kong(env, tables, fixtures)
 end
 
 
+----------------
+-- Variables/constants
+-- @section exported-fields
+
+
+--- Below is a list of fields/constants exported on the `helpers` module table:
+-- @table helpers
+-- @field dir The [`pl.dir` module of Penlight](http://tieske.github.io/Penlight/libraries/pl.dir.html)
+-- @field path The [`pl.path` module of Penlight](http://tieske.github.io/Penlight/libraries/pl.path.html)
+-- @field file The [`pl.file` module of Penlight](http://tieske.github.io/Penlight/libraries/pl.file.html)
+-- @field utils The [`pl.utils` module of Penlight](http://tieske.github.io/Penlight/libraries/pl.utils.html)
+-- @field test_conf The Kong test configuration. See also `get_running_conf` which might be slightly different.
+-- @field test_conf_path The configuration file in use.
+-- @field mock_upstream_hostname
+-- @field mock_upstream_protocol
+-- @field mock_upstream_host
+-- @field mock_upstream_port
+-- @field mock_upstream_url Base url constructed from the components
+-- @field mock_upstream_ssl_protocol
+-- @field mock_upstream_ssl_host
+-- @field mock_upstream_ssl_port
+-- @field mock_upstream_ssl_url Base url constructed from the components
+-- @field mock_upstream_stream_port
+-- @field mock_upstream_stream_ssl_port
+-- @field mock_grpc_upstream_proto_path
+-- @field redis_host The hostname for a Redis instance if available. Port should be `6379`.
+
 ----------
 -- Exposed
 ----------
 -- @export
-return {
+  return {
   -- Penlight
   dir = pl_dir,
   path = pl_path,
