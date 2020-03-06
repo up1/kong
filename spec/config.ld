@@ -1,0 +1,10 @@
+project='Kong test helpers'
+title='Kong test framework'
+description='Test helper functions for Kong (integration) testing'
+format='markdown'
+file='./'
+dir='docs'
+readme='readme.md'
+sort=true
+sort_modules=true
+style='./'
