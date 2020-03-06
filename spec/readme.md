@@ -1,15 +1,14 @@
 Test helpers for Kong (integration) tests
 =========================================
 
-To generate the documentation run the following command in the `./spec` directory
-of the Kong source tree:
+To generate the documentation run the following command in the Kong source tree:
 
 ```
 # install ldoc using LuaRocks
 luarocks install ldoc
 
-# generate the docs
-ldoc .
+# generate and open the docs
+cd spec && ldoc . && open docs/index.html && cd ..
 ```
 
 ## Environment variables
@@ -23,3 +22,7 @@ instance.
 To prevent the test helpers from cleaning the Kong working directory, the
 variable `KONG_TEST_DONT_CLEAN` can be set.
 This comes in handy when inspecting then logs after the tests completed.
+
+When testing with Redis, the environment variable `KONG_SPEC_REDIS_HOST` can be
+used to specify where the Redis server can be found. If not specified it will default
+to `127.0.0.1`. This setting is available to tests via `helpers.redis_host`.

@@ -116,6 +116,45 @@ local function unindent(str, concat_newlines, spaced_newlines)
   return (str:gsub("^\n%s*", ""):gsub("\n" .. prefix, repl):gsub("\n$", ""):gsub("\\r", "\r"))
 end
 
+
+--- Set an environment variable
+-- @name setenv
+-- @param env (string) name of the environment variable
+-- @param value the value to set
+-- @return true on success, false otherwise
+local function setenv(env, value)
+  return ffi.C.setenv(env, value, 1) == 0
+end
+
+
+--- Unset an environment variable
+-- @name setenv
+-- @param env (string) name of the environment variable
+-- @return true on success, false otherwise
+local function unsetenv(env)
+  return ffi.C.unsetenv(env) == 0
+end
+
+
+--- Write a yaml file.
+-- @name make_yaml_file
+-- @param content (string) the yaml string to write to the file
+-- @param filename (optional) if not provided, a temp name will be created
+-- @return filename of the file written
+local function make_yaml_file(content, filename)
+  if not filename then
+    filename = os.tmpname()
+    os.rename(filename, filename .. ".yml")
+    filename = filename .. ".yml"
+  end
+  local fd = assert(io.open(filename, "w"))
+  assert(fd:write(unindent(content)))
+  assert(fd:write("\n")) -- ensure last line ends in newline
+  assert(fd:close())
+  return filename
+end
+
+
 ---------------
 -- Conf and DAO
 ---------------
@@ -327,6 +366,40 @@ local function intercept(...)
   return unpack(args)
 end
 
+
+-- Prepopulate Schema's cache
+Schema.new(consumers_schema_def)
+Schema.new(services_schema_def)
+Schema.new(routes_schema_def)
+
+local plugins_schema = assert(Entity.new(plugins_schema_def))
+
+
+--- Validate a plugin configuration against a plugin schema.
+-- @name validate_plugin_config_schema
+-- @param config The configuration to validate. This is not the full schema,
+-- only the `config` sub-object needs to be passed.
+-- @param schema_def The schema definition
+-- @return the validated schema, or nil+error
+local function validate_plugin_config_schema(config, schema_def)
+  assert(plugins_schema:new_subschema(schema_def.name, schema_def))
+  local entity = {
+    id = utils.uuid(),
+    name = schema_def.name,
+    config = config
+  }
+  local entity_to_insert, err = plugins_schema:process_auto_fields(entity, "insert")
+  if err then
+    return nil, err
+  end
+  local _, err = plugins_schema:validate_insert(entity_to_insert)
+  if err then return
+    nil, err
+  end
+  return entity_to_insert
+end
+
+
 -- Case insensitive lookup function, returns the value and the original key. Or
 -- if not found nil and the search key
 -- @usage -- sample usage
@@ -347,6 +420,7 @@ local function lookup(t, k)
   end
   return nil, ok
 end
+
 
 --- Waits until a specific condition is met.
 -- The check function will repeatedly be called (with a fixed interval), until
@@ -400,6 +474,25 @@ local function wait_until(f, timeout, step)
     -- report a failure for `f` to meet its condition
     error("wait_until() timeout (after delay " .. timeout .. "s)", 2)
   end
+end
+
+
+local admin_client -- forward declaration
+
+--- Waits for invalidation of a cached key by polling the mgt-api
+-- and waiting for a 404 response.
+-- @name wait_for_invalidation
+-- @param key (string) the cache-key to check
+-- @param timeout (optional) in seconds (for default see `wait_until`).
+local function wait_for_invalidation(key, timeout)
+  -- TODO: this code is not used, but is duplicated all over the codebase!
+  -- search codebase for "/cache/" endpoint
+  local api_client = admin_client()
+  wait_until(function()
+    local res = api_client:get("/cache/" .. key)
+    res:read_body()
+    return res.status == 404
+  end, timeout)
 end
 
 
@@ -616,7 +709,7 @@ end
 -- @param timeout (optional, number) the timeout to use
 -- @param forced_port (optional, number) if provided will override the port in
 -- the Kong configuration with this port
-local function admin_client(timeout, forced_port)
+function admin_client(timeout, forced_port)
   local admin_ip, admin_port
   for _, entry in ipairs(conf.admin_listeners) do
     if entry.ssl == false then
@@ -643,6 +736,166 @@ local function admin_ssl_client(timeout)
   local client = http_client(admin_ip, admin_port, timeout or 60000)
   assert(client:ssl_handshake())
   return client
+end
+
+
+----------------
+-- HTTP2 and GRPC clients
+-- @section Shell-helpers
+
+
+-- Generate grpcurl flags from a table of `flag-value`. If `value` is not a
+-- string, value is ignored and `flag` is passed as is.
+local function gen_grpcurl_opts(opts_t)
+  local opts_l = {}
+
+  for opt, val in pairs(opts_t) do
+    if val ~= false then
+      opts_l[#opts_l + 1] = opt .. " " .. (type(val) == "string" and val or "")
+    end
+  end
+
+  return table.concat(opts_l, " ")
+end
+
+
+--- Creates an HTTP/2 client, based on the lua-http library.
+-- @name http2_client
+-- @param host hostname to connect to
+-- @param port port to connect to
+-- @param tls boolean indicating whether to establish a tls session
+-- @return http2 client
+local function http2_client(host, port, tls)
+  local host = assert(host)
+  local port = assert(port)
+  tls = tls or false
+
+  local request = require "http.request"
+  local req = request.new_from_uri({
+    scheme = tls and "https" or "http",
+    host = host,
+    port = port,
+  })
+  req.version = 2
+  req.tls = tls
+
+  if tls then
+    local http_tls = require "http.tls"
+    local openssl_ctx = require "openssl.ssl.context"
+    local n_ctx = http_tls.new_client_context()
+    n_ctx:setVerify(openssl_ctx.VERIFY_NONE)
+    req.ctx = n_ctx
+  end
+
+  local meta = getmetatable(req) or {}
+
+  meta.__call = function(req, opts)
+    local headers = opts and opts.headers
+    local timeout = opts and opts.timeout
+
+    for k, v in pairs(headers or {}) do
+      req.headers:upsert(k, v)
+    end
+
+    local headers, stream = req:go(timeout)
+    local body = stream:get_body_as_string()
+    return body, headers
+  end
+
+  return setmetatable(req, meta)
+end
+
+
+--- returns a pre-configured cleartext `http2_client` for the Kong proxy port.
+-- @name proxy_client_h2c
+-- @return http2 client
+local function proxy_client_h2c()
+  local proxy_ip = get_proxy_ip(false, true)
+  local proxy_port = get_proxy_port(false, true)
+  assert(proxy_ip, "No http-proxy found in the configuration")
+  return http2_client(proxy_ip, proxy_port)
+end
+
+
+--- returns a pre-configured TLS `http2_client` for the Kong SSL proxy port.
+-- @name proxy_client_h2
+-- @return http2 client
+local function proxy_client_h2()
+  local proxy_ip = get_proxy_ip(true, true)
+  local proxy_port = get_proxy_port(true, true)
+  assert(proxy_ip, "No https-proxy found in the configuration")
+  return http2_client(proxy_ip, proxy_port, true)
+end
+
+
+--- Creates a gRPC client, based on the grpcurl CLI.
+-- @name grpc_client
+-- @param host hostname to connect to
+-- @param port port to connect to
+-- @param opts table with options supported by grpcurl
+-- @return grpc client
+local function grpc_client(host, port, opts)
+  local host = assert(host)
+  local port = assert(tostring(port))
+
+  opts = opts or {}
+  if not opts["-proto"] then
+    opts["-proto"] = MOCK_GRPC_UPSTREAM_PROTO_PATH
+  end
+
+  return setmetatable({
+    opts = opts,
+    cmd_template = string.format("bin/grpcurl %%s %s:%s %%s", host, port)
+
+  }, {
+    __call = function(t, args)
+      local service = assert(args.service)
+      local body = args.body
+
+      local t_body = type(body)
+      if t_body ~= "nil" then
+        if t_body == "table" then
+          body = cjson.encode(body)
+        end
+
+        args.opts["-d"] = string.format("'%s'", body)
+      end
+
+      local opts = gen_grpcurl_opts(pl_tablex.merge(t.opts, args.opts, true))
+      local ok, err, out = exec(string.format(t.cmd_template, opts, service))
+
+      if ok then
+        return ok, out
+      else
+        return nil, err
+      end
+    end
+  })
+end
+
+
+--- returns a pre-configured `grpc_client` for the Kong proxy port.
+-- @name proxy_client_grpc
+-- @param host hostname to connect to
+-- @param port port to connect to
+-- @return grpc client
+local function proxy_client_grpc(host, port)
+  local proxy_ip = host or get_proxy_ip(false, true)
+  local proxy_port = port or get_proxy_port(false, true)
+  assert(proxy_ip, "No http-proxy found in the configuration")
+  return grpc_client(proxy_ip, proxy_port, {["-plaintext"] = true})
+end
+
+--- returns a pre-configured `grpc_client` for the Kong SSL proxy port.
+-- @name proxy_client_grpcs
+-- @param host hostname to connect to
+-- @param port port to connect to
+-- @return grpc client
+local function proxy_client_grpcs(host, port)
+  local proxy_ip = host or get_proxy_ip(true, true)
+  local proxy_port = port or get_proxy_port(true, true)
+  assert(proxy_ip, "No https-proxy found in the configuration")
+  return grpc_client(proxy_ip, proxy_port, {["-insecure"] = true})
 end
 
 
@@ -1762,23 +2015,6 @@ local function clean_prefix(prefix)
 end
 
 
---- Waits for invalidation of a cached key by polling the mgt-api
--- and waiting for a 404 response.
--- @name wait_for_invalidation
--- @param key (string) the cache-key to check
--- @param timeout (optional) in seconds (for default see `wait_until`).
-local function wait_for_invalidation(key, timeout)
-  -- TODO: this code is not used, but is duplicated all over the codebase!
-  -- search codebase for "/cache/" endpoint
-  local api_client = admin_client()
-  wait_until(function()
-    local res = api_client:get("/cache/" .. key)
-    res:read_body()
-    return res.status == 404
-  end, timeout)
-end
-
-
 -- Reads the pid from a pid file and returns it, or nil + err
 local function get_pid_from_file(pid_path)
   local pid
@@ -1833,39 +2069,6 @@ end
 local function get_running_conf(prefix)
   local default_conf = conf_loader(nil, {prefix = prefix or conf.prefix})
   return conf_loader.load_config_file(default_conf.kong_env)
-end
-
-
--- Prepopulate Schema's cache
-Schema.new(consumers_schema_def)
-Schema.new(services_schema_def)
-Schema.new(routes_schema_def)
-
-local plugins_schema = assert(Entity.new(plugins_schema_def))
-
-
---- Validate a plugin configuration against a plugin schema.
--- @name validate_plugin_config_schema
--- @param config The configuration to validate. This is not the full schema,
--- only the `config` sub-object needs to be passed.
--- @param schema_def The schema definition
--- @return the validated schema, or nil+error
-local function validate_plugin_config_schema(config, schema_def)
-  assert(plugins_schema:new_subschema(schema_def.name, schema_def))
-  local entity = {
-    id = utils.uuid(),
-    name = schema_def.name,
-    config = config
-  }
-  local entity_to_insert, err = plugins_schema:process_auto_fields(entity, "insert")
-  if err then
-    return nil, err
-  end
-  local _, err = plugins_schema:validate_insert(entity_to_insert)
-  if err then return
-    nil, err
-  end
-  return entity_to_insert
 end
 
 
@@ -2103,198 +2306,6 @@ end
 local function restart_kong(env, tables, fixtures)
   stop_kong(env.prefix, true, true)
   return start_kong(env, tables, true, fixtures)
-end
-
-
---- Write a yaml file.
--- @name make_yaml_file
--- @param content (string) the yaml string to write to the file
--- @param filename (optional) if not provided, a temp name will be created
--- @return filename of the file written
-local function make_yaml_file(content, filename)
-  if not filename then
-    filename = os.tmpname()
-    os.rename(filename, filename .. ".yml")
-    filename = filename .. ".yml"
-  end
-  local fd = assert(io.open(filename, "w"))
-  assert(fd:write(unindent(content)))
-  assert(fd:write("\n")) -- ensure last line ends in newline
-  assert(fd:close())
-  return filename
-end
-
-
--- Generate grpcurl flags from a table of `flag-value`. If `value` is not a
--- string, value is ignored and `flag` is passed as is.
-local function gen_grpcurl_opts(opts_t)
-  local opts_l = {}
-
-  for opt, val in pairs(opts_t) do
-    if val ~= false then
-      opts_l[#opts_l + 1] = opt .. " " .. (type(val) == "string" and val or "")
-    end
-  end
-
-  return table.concat(opts_l, " ")
-end
-
-
---- Creates an HTTP/2 client, based on the lua-http library.
--- @name http2_client
--- @param host hostname to connect to
--- @param port port to connect to
--- @param tls boolean indicating whether to establish a tls session
--- @return http2 client
-local function http2_client(host, port, tls)
-  local host = assert(host)
-  local port = assert(port)
-  tls = tls or false
-
-  local request = require "http.request"
-  local req = request.new_from_uri({
-    scheme = tls and "https" or "http",
-    host = host,
-    port = port,
-  })
-  req.version = 2
-  req.tls = tls
-
-  if tls then
-    local http_tls = require "http.tls"
-    local openssl_ctx = require "openssl.ssl.context"
-    local n_ctx = http_tls.new_client_context()
-    n_ctx:setVerify(openssl_ctx.VERIFY_NONE)
-    req.ctx = n_ctx
-  end
-
-  local meta = getmetatable(req) or {}
-
-  meta.__call = function(req, opts)
-    local headers = opts and opts.headers
-    local timeout = opts and opts.timeout
-
-    for k, v in pairs(headers or {}) do
-      req.headers:upsert(k, v)
-    end
-
-    local headers, stream = req:go(timeout)
-    local body = stream:get_body_as_string()
-    return body, headers
-  end
-
-  return setmetatable(req, meta)
-end
-
-
---- returns a pre-configured cleartext `http2_client` for the Kong proxy port.
--- @name proxy_client_h2c
--- @return http2 client
-local function proxy_client_h2c()
-  local proxy_ip = get_proxy_ip(false, true)
-  local proxy_port = get_proxy_port(false, true)
-  assert(proxy_ip, "No http-proxy found in the configuration")
-  return http2_client(proxy_ip, proxy_port)
-end
-
-
---- returns a pre-configured TLS `http2_client` for the Kong SSL proxy port.
--- @name proxy_client_h2
--- @return http2 client
-local function proxy_client_h2()
-  local proxy_ip = get_proxy_ip(true, true)
-  local proxy_port = get_proxy_port(true, true)
-  assert(proxy_ip, "No https-proxy found in the configuration")
-  return http2_client(proxy_ip, proxy_port, true)
-end
-
-
---- Creates a gRPC client, based on the grpcurl CLI.
--- @name grpc_client
--- @param host hostname to connect to
--- @param port port to connect to
--- @param opts table with options supported by grpcurl
--- @return grpc client
-local function grpc_client(host, port, opts)
-  local host = assert(host)
-  local port = assert(tostring(port))
-
-  opts = opts or {}
-  if not opts["-proto"] then
-    opts["-proto"] = MOCK_GRPC_UPSTREAM_PROTO_PATH
-  end
-
-  return setmetatable({
-    opts = opts,
-    cmd_template = string.format("bin/grpcurl %%s %s:%s %%s", host, port)
-
-  }, {
-    __call = function(t, args)
-      local service = assert(args.service)
-      local body = args.body
-
-      local t_body = type(body)
-      if t_body ~= "nil" then
-        if t_body == "table" then
-          body = cjson.encode(body)
-        end
-
-        args.opts["-d"] = string.format("'%s'", body)
-      end
-
-      local opts = gen_grpcurl_opts(pl_tablex.merge(t.opts, args.opts, true))
-      local ok, err, out = exec(string.format(t.cmd_template, opts, service))
-
-      if ok then
-        return ok, out
-      else
-        return nil, err
-      end
-    end
-  })
-end
-
-
---- returns a pre-configured `grpc_client` for the Kong proxy port.
--- @name proxy_client_grpc
--- @param host hostname to connect to
--- @param port port to connect to
--- @return grpc client
-local function proxy_client_grpc(host, port)
-  local proxy_ip = host or get_proxy_ip(false, true)
-  local proxy_port = port or get_proxy_port(false, true)
-  assert(proxy_ip, "No http-proxy found in the configuration")
-  return grpc_client(proxy_ip, proxy_port, {["-plaintext"] = true})
-end
-
---- returns a pre-configured `grpc_client` for the Kong SSL proxy port.
--- @name proxy_client_grpcs
--- @param host hostname to connect to
--- @param port port to connect to
--- @return grpc client
-local function proxy_client_grpcs(host, port)
-  local proxy_ip = host or get_proxy_ip(true, true)
-  local proxy_port = port or get_proxy_port(true, true)
-  assert(proxy_ip, "No https-proxy found in the configuration")
-  return grpc_client(proxy_ip, proxy_port, {["-insecure"] = true})
-end
-
-
---- Set an environment variable
--- @name setenv
--- @param env (string) name of the environment variable
--- @param value the value to set
--- @return true on success, false otherwise
-local function setenv(env, value)
-  return ffi.C.setenv(env, value, 1) == 0
-end
-
---- Unset an environment variable
--- @name setenv
--- @param env (string) name of the environment variable
--- @return true on success, false otherwise
-local function unsetenv(env)
-  return ffi.C.unsetenv(env) == 0
 end
 
 
