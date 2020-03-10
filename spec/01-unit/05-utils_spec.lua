@@ -676,4 +676,32 @@ describe("Utils", function()
       end, "scale must be equal or greater than 0")
     end)
   end)
+
+  describe("gzip_[de_in]flate()", function()
+    it("empty string", function()
+      local gz = assert(utils.gzip_deflate(""))
+      assert.equal(utils.gzip_inflate(gz), "")
+    end)
+
+    it("small string (< 1 buffer)", function()
+      local gz = assert(utils.gzip_deflate("aabbccddeeffgg"))
+      assert.equal(utils.gzip_inflate(gz), "aabbccddeeffgg")
+    end)
+
+    it("long string (> 1 buffer)", function()
+      local s = string.rep("a", 70000) -- > 64KB
+
+      local gz = assert(utils.gzip_deflate(s))
+
+      assert(#gz < #s)
+
+      assert.equal(utils.gzip_inflate(gz), s)
+    end)
+
+    it("bad gzipped data", function()
+      local res, err = utils.gzip_inflate("bad")
+      assert.is_nil(res)
+      assert.equal(err, "INFLATE: data error")
+    end)
+  end)
 end)
